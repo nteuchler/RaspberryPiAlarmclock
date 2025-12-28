@@ -1,3 +1,4 @@
+<!-- File: templates/index.html -->
 <!doctype html>
 <html>
 <head>
@@ -19,7 +20,7 @@
   <h2>Status</h2>
   <div>Mode: <b>{{ mode }}</b></div>
   <div>Expected death time: <b>{{ expected_death }}</b></div>
-  <div>Hours remaining: <b id="hrs">{{ "%.2f"|format(hours_remaining) }}</b></div>
+  <div><b id="deathText">{{ death_text }}</b></div>
   <small>Life expectancy is a statistical expectation, not a prediction.</small>
 </div>
 
@@ -33,12 +34,13 @@
   </div>
 
   <div class="row">
-    <label>Alarm tone path:
+    <label>Alarm tone fallback path:
       <input id="tone" style="width: 320px" value="{{ settings.alarm_tone_path }}"/>
     </label>
   </div>
+  <small>Alarm tones are random MP3s from <b>./alarmtones/</b>. Fallback path is used only if that folder is empty.</small>
 
-  <div class="row">
+  <div class="row" style="margin-top:10px;">
     <label>Content type:
       <select id="ctype">
         <option value="stream" {% if settings.content_type=="stream" %}selected{% endif %}>Internet radio stream</option>
@@ -74,8 +76,8 @@
   <div class="card danger">
     <h3>Add alarm</h3>
     <div class="row">
-      <label>Time (HH:MM):
-        <input id="new_time" value="07:30"/>
+      <label>Time:
+        <input id="new_time" type="time" value="07:30"/>
       </label>
       <label>Days:
         <select id="new_days">
@@ -101,7 +103,7 @@
       <div class="row">
         <div><b>#{{ a.id }}</b></div>
         <label>Time:
-          <input id="t{{a.id}}" value="{{ a.time_hhmm }}"/>
+          <input id="t{{a.id}}" type="time" value="{{ a.time_hhmm }}"/>
         </label>
         <label>Days mask:
           <input id="m{{a.id}}" type="number" value="{{ a.days_mask }}"/>
@@ -140,7 +142,13 @@ async function addAlarm() {
     days_mask: parseInt(document.getElementById('new_days').value),
     enabled: true
   };
-  await fetch('/api/alarms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+
+  const res = await fetch('/api/alarms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({error:"unknown"}));
+    alert("Failed to add alarm: " + (err.error || res.status));
+    return;
+  }
   location.reload();
 }
 
@@ -150,7 +158,13 @@ async function saveAlarm(id) {
     days_mask: parseInt(document.getElementById('m'+id).value),
     enabled: document.getElementById('e'+id).value === "true"
   };
-  await fetch('/api/alarms/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+
+  const res = await fetch('/api/alarms/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({error:"unknown"}));
+    alert("Failed to save alarm: " + (err.error || res.status));
+    return;
+  }
   location.reload();
 }
 
@@ -162,7 +176,6 @@ async function delAlarm(id) {
 async function control(action) {
   await fetch('/api/control', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action}) });
 }
-
 </script>
 
 </body>
