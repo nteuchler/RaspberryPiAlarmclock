@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Pi Alarm Clock</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input, select, button { padding: 10px; font-size: 16px; }
+    button { cursor: pointer; }
+    small { color: #666; }
+    .danger { border-color: #f3c; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Status</h2>
+  <div>Mode: <b>{{ mode }}</b></div>
+  <div>Expected death time: <b>{{ expected_death }}</b></div>
+  <div>Hours remaining: <b id="hrs">{{ "%.2f"|format(hours_remaining) }}</b></div>
+  <small>Life expectancy is a statistical expectation, not a prediction.</small>
+</div>
+
+<div class="card">
+  <h2>Settings</h2>
+  <div class="row">
+    <label>Volume (0-100):
+      <input id="vol" type="number" min="0" max="100" value="{{ settings.volume_percent }}"/>
+    </label>
+    <button onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="row">
+    <label>Alarm tone path:
+      <input id="tone" style="width: 320px" value="{{ settings.alarm_tone_path }}"/>
+    </label>
+  </div>
+
+  <div class="row">
+    <label>Content type:
+      <select id="ctype">
+        <option value="stream" {% if settings.content_type=="stream" %}selected{% endif %}>Internet radio stream</option>
+        <option value="file" {% if settings.content_type=="file" %}selected{% endif %}>Local file</option>
+      </select>
+    </label>
+    <label>Stream URL or file path:
+      <input id="cval" style="width: 420px" value="{{ settings.content_value }}"/>
+    </label>
+  </div>
+
+  <div class="row">
+    <button onclick="control('test_alarm')">Test alarm</button>
+    <button onclick="control('test_content')">Test content</button>
+    <button onclick="control('stop')">Stop</button>
+  </div>
+
+  <hr/>
+  <div class="row">
+    <label>Birthdate:
+      <input id="birth" value="{{ settings.birthdate }}"/>
+    </label>
+    <label>Life expectancy (years):
+      <input id="life" type="number" step="0.1" value="{{ settings.life_expectancy_years }}"/>
+    </label>
+    <button onclick="saveSettings()">Save</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Alarms</h2>
+
+  <div class="card danger">
+    <h3>Add alarm</h3>
+    <div class="row">
+      <label>Time (HH:MM):
+        <input id="new_time" value="07:30"/>
+      </label>
+      <label>Days:
+        <select id="new_days">
+          <option value="62">Mon-Fri</option>
+          <option value="127">Every day</option>
+          <option value="65">Sat+Sun</option>
+          <option value="1">Mon</option>
+          <option value="2">Tue</option>
+          <option value="4">Wed</option>
+          <option value="8">Thu</option>
+          <option value="16">Fri</option>
+          <option value="32">Sat</option>
+          <option value="64">Sun</option>
+        </select>
+      </label>
+      <button onclick="addAlarm()">Add</button>
+    </div>
+    <small>Days are stored as a bitmask: Mon=1, Tue=2, ..., Sun=64.</small>
+  </div>
+
+  {% for a in alarms %}
+    <div class="card">
+      <div class="row">
+        <div><b>#{{ a.id }}</b></div>
+        <label>Time:
+          <input id="t{{a.id}}" value="{{ a.time_hhmm }}"/>
+        </label>
+        <label>Days mask:
+          <input id="m{{a.id}}" type="number" value="{{ a.days_mask }}"/>
+        </label>
+        <label>Enabled:
+          <select id="e{{a.id}}">
+            <option value="true" {% if a.enabled==1 %}selected{% endif %}>true</option>
+            <option value="false" {% if a.enabled==0 %}selected{% endif %}>false</option>
+          </select>
+        </label>
+        <button onclick="saveAlarm({{a.id}})">Save</button>
+        <button onclick="delAlarm({{a.id}})">Delete</button>
+      </div>
+      <small>Last fired: {{ a.last_fired_date or "never" }}</small>
+    </div>
+  {% endfor %}
+</div>
+
+<script>
+async function saveSettings() {
+  const payload = {
+    volume_percent: parseInt(document.getElementById('vol').value || "0"),
+    alarm_tone_path: document.getElementById('tone').value,
+    content_type: document.getElementById('ctype').value,
+    content_value: document.getElementById('cval').value,
+    birthdate: document.getElementById('birth').value,
+    life_expectancy_years: parseFloat(document.getElementById('life').value || "0"),
+  };
+  await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  location.reload();
+}
+
+async function addAlarm() {
+  const payload = {
+    time_hhmm: document.getElementById('new_time').value,
+    days_mask: parseInt(document.getElementById('new_days').value),
+    enabled: true
+  };
+  await fetch('/api/alarms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  location.reload();
+}
+
+async function saveAlarm(id) {
+  const payload = {
+    time_hhmm: document.getElementById('t'+id).value,
+    days_mask: parseInt(document.getElementById('m'+id).value),
+    enabled: document.getElementById('e'+id).value === "true"
+  };
+  await fetch('/api/alarms/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  location.reload();
+}
+
+async function delAlarm(id) {
+  await fetch('/api/alarms/'+id, { method:'DELETE' });
+  location.reload();
+}
+
+async function control(action) {
+  await fetch('/api/control', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action}) });
+}
+
+</script>
+
+</body>
+</html>
