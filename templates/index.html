@@ -7,13 +7,12 @@
   <style>
     :root {
       --bg: #0b0d12;
-      --card: #111522;
       --muted: #9aa4b2;
       --text: #e8eef6;
       --line: rgba(255,255,255,0.08);
-      --accent: #7aa2ff;
       --danger: #ff4d6d;
       --ok: #2dd4bf;
+      --accent: #7aa2ff;
     }
     body {
       margin: 0;
@@ -53,9 +52,8 @@
     h3 { margin:0 0 10px; font-size:14px; font-weight:740; color: rgba(232,238,246,0.92); }
     .muted { color: var(--muted); font-size: 12px; }
     .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
-    .row > * { min-width: 140px; }
-
     label { font-size:12px; color: var(--muted); display:grid; gap:6px; }
+
     input, select, button {
       font-size: 16px;
       padding: 10px 12px;
@@ -101,7 +99,7 @@
     .bar {
       margin-top:10px; height:10px; border-radius:999px;
       background: rgba(255,255,255,0.06); border:1px solid var(--line);
-      overflow:hidden; position:relative;
+      overflow:hidden;
     }
     .bar > span {
       display:block; height:100%; width:0%;
@@ -123,9 +121,11 @@
       color: rgba(232,238,246,0.9); font-size:13px; user-select:none;
     }
     .day input { width:16px; height:16px; }
+
     .alarmItem { display:grid; gap:10px; }
     .alarmMeta { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     .alarmId { font-weight:850; color: rgba(232,238,246,0.9); }
+
     .err { color: var(--danger); font-size: 12px; margin-top: 6px; display:none; }
   </style>
 </head>
@@ -149,8 +149,7 @@
         <div class="bar"><span id="deathBar"></span></div>
         <div class="chips">
           <div class="chip">Expected: <b style="color: var(--text)">{{ expected_death }}</b></div>
-          <div class="chip">24h clock</div>
-          <div class="chip muted">Statistik, ikke en spådom</div>
+          <div class="chip">Life expectancy (locked): <b style="color: var(--text)">{{ settings.life_expectancy_years_locked }}</b></div>
         </div>
       </div>
     </div>
@@ -204,11 +203,6 @@
       <label>Birthdate (YYYY-MM-DD)
         <input id="birth" value="{{ settings.birthdate }}"/>
       </label>
-
-      <label>Life expectancy (years)
-        <input id="life" type="number" step="0.1" value="{{ settings.life_expectancy_years }}"/>
-      </label>
-
       <button onclick="saveSettings()">Save</button>
     </div>
   </div>
@@ -244,10 +238,6 @@
           </select>
         </label>
         <button onclick="addAlarm()">Add</button>
-      </div>
-
-      <div class="muted" style="margin-top: 8px;">
-        Bitmask: Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64.
       </div>
     </div>
 
@@ -299,22 +289,18 @@
 </div>
 
 <script>
-  // ----- Death timer live countdown -----
   const expectedDeathEpoch = {{ expected_death_epoch|int }};
   const deathHoursEl = document.getElementById('deathHours');
   const deathTextEl = document.getElementById('deathText');
   const deathBarEl = document.getElementById('deathBar');
 
   function fmtInt(n) { return Math.max(0, Math.floor(n)).toString(); }
-
   function updateDeath() {
     const now = Date.now() / 1000;
     const secLeft = Math.max(0, expectedDeathEpoch - now);
     const hoursLeft = secLeft / 3600;
-
     deathHoursEl.textContent = fmtInt(hoursLeft) + " timer tilbage";
     deathTextEl.textContent = "Du har kun " + fmtInt(hoursLeft) + " timer tilbage af livet, brug ikke dem alle på at sove";
-
     const fiveYears = 5 * 365.2425 * 24;
     const pct = Math.max(0, Math.min(100, (hoursLeft / fiveYears) * 100));
     deathBarEl.style.width = pct.toFixed(2) + "%";
@@ -322,7 +308,6 @@
   updateDeath();
   setInterval(updateDeath, 1000);
 
-  // ----- Days helpers (checkboxes -> bitmask) -----
   function maskFromContainer(container) {
     let mask = 0;
     container.querySelectorAll('input[type="checkbox"][data-bit]').forEach(b => {
@@ -331,7 +316,6 @@
     });
     return mask;
   }
-
   function setCheckboxesFromMask(container, mask) {
     container.querySelectorAll('input[type="checkbox"][data-bit]').forEach(b => {
       const bit = parseInt(b.getAttribute('data-bit'));
@@ -339,7 +323,6 @@
     });
   }
 
-  // ----- Time validation / normalization (always 24h) -----
   function normalizeTimeText(s) {
     s = (s || "").trim();
     const m = /^(\d{1,2})\s*:\s*(\d{1,2})$/.exec(s);
@@ -347,14 +330,10 @@
     const hh = parseInt(m[1], 10);
     const mm = parseInt(m[2], 10);
     if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-    const HH = String(hh).padStart(2, '0');
-    const MM = String(mm).padStart(2, '0');
-    return `${HH}:${MM}`;
+    return String(hh).padStart(2, '0') + ":" + String(mm).padStart(2, '0');
   }
-
   function showErr(el, show) { el.style.display = show ? "block" : "none"; }
 
-  // Initialize existing alarms' checkboxes based on hidden mask
   document.querySelectorAll('.days[data-alarm]').forEach(container => {
     const id = container.getAttribute('data-alarm');
     const mask = parseInt(document.getElementById('m' + id).value || "0");
@@ -370,7 +349,6 @@
     updateMaskText();
   });
 
-  // ----- API calls -----
   async function saveSettings() {
     const payload = {
       volume_percent: parseInt(document.getElementById('vol').value || "0"),
@@ -378,7 +356,6 @@
       content_type: document.getElementById('ctype').value,
       content_value: document.getElementById('cval').value,
       birthdate: document.getElementById('birth').value,
-      life_expectancy_years: parseFloat(document.getElementById('life').value || "0"),
     };
 
     const res = await fetch('/api/settings', {
@@ -395,17 +372,12 @@
   }
 
   async function addAlarm() {
-    const tRaw = document.getElementById('new_time').value;
-    const t = normalizeTimeText(tRaw);
+    const t = normalizeTimeText(document.getElementById('new_time').value);
     showErr(document.getElementById('new_time_err'), !t);
     if (!t) return;
 
     const daysMask = maskFromContainer(document.getElementById('new_days'));
-    const payload = {
-      time_hhmm: t,
-      days_mask: daysMask,
-      enabled: document.getElementById('new_enabled').value === "true"
-    };
+    const payload = { time_hhmm: t, days_mask: daysMask, enabled: document.getElementById('new_enabled').value === "true" };
 
     const res = await fetch('/api/alarms', {
       method:'POST',
@@ -421,8 +393,7 @@
   }
 
   async function saveAlarm(id) {
-    const tRaw = document.getElementById('t'+id).value;
-    const t = normalizeTimeText(tRaw);
+    const t = normalizeTimeText(document.getElementById('t'+id).value);
     showErr(document.getElementById('err'+id), !t);
     if (!t) return;
 

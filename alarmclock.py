@@ -18,14 +18,11 @@ from gpiozero import Button
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(APP_DIR, "alarmclock.db")
 
-# Random alarm tone folder (MP3 files)
 ALARMTONES_DIR = os.path.join(APP_DIR, "alarmtones")
 
-# ----- GPIO button -----
-BUTTON_GPIO = 17  # BCM numbering (GPIO17 / pin 11)
+BUTTON_GPIO = 17  # BCM numbering
 button = Button(BUTTON_GPIO, pull_up=True, bounce_time=0.05)
 
-# ----- Logging -----
 LOG_LEVEL = os.environ.get("ALARM_LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.DEBUG),
@@ -34,20 +31,20 @@ logging.basicConfig(
 )
 log = logging.getLogger("alarmclock")
 
-# ----- Defaults -----
+# ---- LOCKED life expectancy (not editable via UI) ----
+LIFE_EXPECTANCY_YEARS_LOCKED = 79.9
+
 DEFAULT_SETTINGS = {
-    "volume_percent": 90,  # 0..100
-    # Used as fallback if alarmtones/ has no mp3
+    "volume_percent": 85,  # raised default
     "alarm_tone_path": os.path.join(APP_DIR, "media", "alarmtone.mp3"),
-    # Used after button press:
-    "content_type": "stream",  # "stream" or "file"
+    "content_type": "stream",
     "content_value": "http://live-icy.gss.dr.dk/A/A05H.mp3",
-    # death clock:
     "birthdate": "1999-04-15",
-    "life_expectancy_years": 79.9,
 }
 
-# Audio process handle
+# VLC volume: 0..512 (256 ~ 100% in VLC terms)
+VLC_VOLUME = 256
+
 player_lock = threading.Lock()
 player_proc = None
 current_mode = "idle"  # idle | alarm | content
@@ -55,9 +52,7 @@ current_mode = "idle"  # idle | alarm | content
 app = Flask(__name__)
 
 
-# ---------- Helpers ----------
 def normalize_hhmm(value: str) -> str:
-    """Accept 'HH:MM' (or 'HH:MM:SS') and return 'HH:MM'. Raise ValueError if invalid."""
     if value is None:
         raise ValueError("missing time")
     value = str(value).strip()
@@ -108,19 +103,17 @@ def init_db():
         )
         """
     )
-
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS alarms (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            time_hhmm TEXT NOT NULL,           -- "07:30"
-            days_mask INTEGER NOT NULL,        -- bitmask Mon..Sun: bit0=Mon ... bit6=Sun
+            time_hhmm TEXT NOT NULL,
+            days_mask INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
-            last_fired_date TEXT              -- "YYYY-MM-DD"
+            last_fired_date TEXT
         )
         """
     )
-
     conn.commit()
 
     for k, v in DEFAULT_SETTINGS.items():
@@ -180,16 +173,34 @@ def update_alarm(alarm_id, time_hhmm=None, days_mask=None, enabled=None):
         conn.close()
         return False
 
-    new_time = time_hhmm if time_hhmm is not None else row["time_hhmm"]
-    new_mask = int(days_mask) if days_mask is not None else row["days_mask"]
-    new_enabled = (1 if enabled else 0) if enabled is not None else row["enabled"]
+    old_time = row["time_hhmm"]
+    old_mask = int(row["days_mask"])
+    old_enabled = int(row["enabled"])
+
+    new_time = time_hhmm if time_hhmm is not None else old_time
+    new_mask = int(days_mask) if days_mask is not None else old_mask
+    new_enabled = (1 if enabled else 0) if enabled is not None else old_enabled
+
+    schedule_changed = (new_time != old_time) or (new_mask != old_mask)
+    enabled_changed = (new_enabled != old_enabled)
+
+    # Critical fix: if schedule/enabled changes, allow it to fire again today.
+    if schedule_changed or (enabled_changed and new_enabled == 1):
+        new_last_fired = None
+        log.info(
+            "Resetting last_fired_date due to update (id=%s schedule_changed=%s enabled_changed=%s)",
+            alarm_id, schedule_changed, enabled_changed
+        )
+    else:
+        new_last_fired = row["last_fired_date"]
 
     cur.execute(
-        "UPDATE alarms SET time_hhmm=?, days_mask=?, enabled=? WHERE id=?",
-        (new_time, new_mask, new_enabled, alarm_id),
+        "UPDATE alarms SET time_hhmm=?, days_mask=?, enabled=?, last_fired_date=? WHERE id=?",
+        (new_time, new_mask, new_enabled, new_last_fired, alarm_id),
     )
     conn.commit()
     conn.close()
+
     log.info("Updated alarm id=%s time=%s mask=%s enabled=%s", alarm_id, new_time, new_mask, bool(new_enabled))
     return True
 
@@ -210,14 +221,27 @@ def set_last_fired(alarm_id, fired_date_str):
 
 
 # ---------- Audio ----------
+def _run_amixer(control: str, percent: int):
+    cmd = ["amixer", "sset", control, f"{percent}%"]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode == 0:
+        log.debug("amixer ok: %s", " ".join(cmd))
+        return True
+    log.debug("amixer fail: %s stderr=%r", " ".join(cmd), (p.stderr or "").strip())
+    return False
+
+
 def set_system_volume(percent: int):
     percent = max(0, min(100, int(percent)))
-    log.info("Setting volume to %s%%", percent)
-    subprocess.run(
-        ["amixer", "sset", "Master", f"{percent}%"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log.info("Setting volume to %s%% (amixer + VLC)", percent)
+
+    # Try multiple common controls (USB cards often don't have Master)
+    ok_any = False
+    for ctl in ["Master", "PCM", "Speaker", "Headphone"]:
+        ok_any = _run_amixer(ctl, percent) or ok_any
+
+    if not ok_any:
+        log.warning("No amixer controls adjusted (Master/PCM/Speaker/Headphone all failed). Audio may be quiet.")
 
 
 def stop_audio():
@@ -239,7 +263,7 @@ def stop_audio():
 
 def play_vlc(target: str, loop: bool):
     global player_proc
-    args = ["cvlc", "--no-video"]
+    args = ["cvlc", "--no-video", "--volume", str(VLC_VOLUME)]
     if LOG_LEVEL not in ("DEBUG", "INFO"):
         args += ["--quiet"]
     if loop:
@@ -268,9 +292,8 @@ def start_alarm():
 def start_content():
     global current_mode
     set_system_volume(get_setting("volume_percent"))
-    ctype = get_setting("content_type")
     cval = get_setting("content_value")
-    log.info("Starting content type=%s value=%s", ctype, cval)
+    log.info("Starting content value=%s", cval)
     play_vlc(cval, loop=False)
     current_mode = "content"
     log.info("Mode -> content")
@@ -279,7 +302,7 @@ def start_content():
 # ---------- Death clock ----------
 def hours_remaining_until_expected_death():
     birth_s = get_setting("birthdate")
-    life_years = float(get_setting("life_expectancy_years"))
+    life_years = LIFE_EXPECTANCY_YEARS_LOCKED
 
     b = datetime.strptime(birth_s, "%Y-%m-%d").date()
     days = life_years * 365.2425
@@ -289,7 +312,7 @@ def hours_remaining_until_expected_death():
     return expected_death, delta.total_seconds() / 3600.0
 
 
-# ---------- Scheduler loop ----------
+# ---------- Scheduler ----------
 def alarm_scheduled_datetime_for_today(time_hhmm: str, now_dt: datetime) -> datetime:
     hh, mm = [int(x) for x in time_hhmm.split(":")]
     return now_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -298,19 +321,20 @@ def alarm_scheduled_datetime_for_today(time_hhmm: str, now_dt: datetime) -> date
 def scheduler_thread():
     log.info("Scheduler thread started")
     last_tick = datetime.now() - timedelta(seconds=2)
-
     last_minute = None
+
     while True:
         try:
             now_dt = datetime.now()
 
-            # periodic tick log
             if last_minute != (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute):
                 last_minute = (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute)
-                log.debug("Tick now=%s tz=%s last_tick=%s",
-                          now_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                          tz_hint(),
-                          last_tick.strftime("%Y-%m-%d %H:%M:%S"))
+                log.debug(
+                    "Tick now=%s tz=%s last_tick=%s",
+                    now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    tz_hint(),
+                    last_tick.strftime("%Y-%m-%d %H:%M:%S"),
+                )
 
             alarms = list_alarms()
             today_s = now_dt.date().isoformat()
@@ -333,13 +357,15 @@ def scheduler_thread():
                     log.warning("Bad time_hhmm for alarm id=%s: %r", a.get("id"), a.get("time_hhmm"))
                     continue
 
-                # Robust trigger: fire when the loop crosses scheduled time
+                # Fire when we CROSS the scheduled time
                 if last_tick < scheduled <= now_dt:
-                    log.info("ALARM DUE: id=%s scheduled=%s now=%s mask=%s",
-                             a["id"],
-                             scheduled.strftime("%Y-%m-%d %H:%M:%S"),
-                             now_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                             mask)
+                    log.info(
+                        "ALARM DUE: id=%s scheduled=%s now=%s mask=%s",
+                        a["id"],
+                        scheduled.strftime("%Y-%m-%d %H:%M:%S"),
+                        now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        mask,
+                    )
                     set_last_fired(a["id"], today_s)
                     start_alarm()
                     break
@@ -352,7 +378,7 @@ def scheduler_thread():
         time.sleep(0.25)
 
 
-# ---------- Button behavior ----------
+# ---------- Button ----------
 def on_button_pressed():
     global current_mode
     log.info("Button pressed (mode=%s)", current_mode)
@@ -382,11 +408,10 @@ def index():
             "content_type": get_setting("content_type"),
             "content_value": get_setting("content_value"),
             "birthdate": get_setting("birthdate"),
-            "life_expectancy_years": get_setting("life_expectancy_years"),
+            "life_expectancy_years_locked": LIFE_EXPECTANCY_YEARS_LOCKED,
         },
         expected_death=expected_death.strftime("%Y-%m-%d %H:%M"),
         expected_death_epoch=int(expected_death.timestamp()),
-        hours_remaining=hrs,
         death_text=death_text,
         mode=current_mode,
         server_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -408,6 +433,7 @@ def api_debug_status():
                 "volume_percent": get_setting("volume_percent"),
                 "content_type": get_setting("content_type"),
                 "content_value": get_setting("content_value"),
+                "life_expectancy_years_locked": LIFE_EXPECTANCY_YEARS_LOCKED,
             },
         }
     )
@@ -423,33 +449,25 @@ def api_settings():
                 "content_type": get_setting("content_type"),
                 "content_value": get_setting("content_value"),
                 "birthdate": get_setting("birthdate"),
-                "life_expectancy_years": get_setting("life_expectancy_years"),
+                "life_expectancy_years_locked": LIFE_EXPECTANCY_YEARS_LOCKED,
             }
         )
 
     data = request.get_json(force=True) or {}
     log.debug("POST /api/settings payload=%s", data)
 
-    old_content_type = get_setting("content_type")
     old_content_value = get_setting("content_value")
 
-    for k in [
-        "volume_percent",
-        "alarm_tone_path",
-        "content_type",
-        "content_value",
-        "birthdate",
-        "life_expectancy_years",
-    ]:
+    # IMPORTANT: life expectancy is locked; ignore any incoming field for it.
+    for k in ["volume_percent", "alarm_tone_path", "content_type", "content_value", "birthdate"]:
         if k in data:
             set_setting(k, data[k])
 
     if "volume_percent" in data:
         set_system_volume(int(get_setting("volume_percent")))
 
-    new_content_type = get_setting("content_type")
     new_content_value = get_setting("content_value")
-    if current_mode == "content" and (new_content_type != old_content_type or new_content_value != old_content_value):
+    if current_mode == "content" and new_content_value != old_content_value:
         log.info("Content changed while playing; restarting content")
         stop_audio()
         start_content()
