@@ -39,12 +39,12 @@ DEFAULT_SETTINGS = {
     "volume_percent": 65,  # 0..100
     # Used as fallback if alarmtones/ has no mp3
     "alarm_tone_path": os.path.join(APP_DIR, "media", "alarmtone.mp3"),
-    # morning content:
+    # Used after button press:
     "content_type": "stream",  # "stream" or "file"
-    "content_value": "http://icecast.omroep.nl/radio1-bb-mp3",  # example stream
+    "content_value": "http://icecast.omroep.nl/radio1-bb-mp3",
     # death clock:
     "birthdate": "1999-04-15",
-    "life_expectancy_years": 79.9,  # Denmark newborn boys (statistical expectation)
+    "life_expectancy_years": 79.9,
 }
 
 # Audio process handle
@@ -72,7 +72,6 @@ def normalize_hhmm(value: str) -> str:
 
 
 def pick_random_alarmtone() -> str:
-    """Pick random mp3 from ./alarmtones. Fall back to configured alarm_tone_path."""
     candidates = glob.glob(os.path.join(ALARMTONES_DIR, "*.mp3"))
     if candidates:
         choice = random.choice(candidates)
@@ -117,7 +116,7 @@ def init_db():
             time_hhmm TEXT NOT NULL,           -- "07:30"
             days_mask INTEGER NOT NULL,        -- bitmask Mon..Sun: bit0=Mon ... bit6=Sun
             enabled INTEGER NOT NULL DEFAULT 1,
-            last_fired_date TEXT              -- "YYYY-MM-DD" to prevent multiple fires/day
+            last_fired_date TEXT              -- "YYYY-MM-DD"
         )
         """
     )
@@ -239,13 +238,8 @@ def stop_audio():
 
 
 def play_vlc(target: str, loop: bool):
-    """
-    target: file path or stream URL
-    loop: if True, loop forever
-    """
     global player_proc
     args = ["cvlc", "--no-video"]
-    # Keep output visible when debugging, otherwise quiet.
     if LOG_LEVEL not in ("DEBUG", "INFO"):
         args += ["--quiet"]
     if loop:
@@ -256,7 +250,6 @@ def play_vlc(target: str, loop: bool):
         if player_proc and player_proc.poll() is None:
             stop_audio()
         log.info("Starting VLC loop=%s target=%s", loop, target)
-        # In debug/info, show VLC output; otherwise discard.
         if LOG_LEVEL in ("DEBUG", "INFO"):
             player_proc = subprocess.Popen(args)
         else:
@@ -297,54 +290,65 @@ def hours_remaining_until_expected_death():
 
 
 # ---------- Scheduler loop ----------
-def is_due_now(alarm_row, now_dt: datetime) -> bool:
-    if int(alarm_row["enabled"]) != 1:
-        return False
-
-    time_hhmm = alarm_row["time_hhmm"]
-    try:
-        hh, mm = [int(x) for x in time_hhmm.split(":")]
-    except Exception:
-        log.warning("Bad time_hhmm in DB for alarm id=%s: %r", alarm_row.get("id"), time_hhmm)
-        return False
-
-    # weekday bit: Mon=0 .. Sun=6
-    wd = now_dt.weekday()  # Mon=0..Sun=6
-    mask = int(alarm_row["days_mask"])
-    if (mask & (1 << wd)) == 0:
-        return False
-
-    scheduled = now_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    # Fire if we are within the first 60 seconds after scheduled time.
-    if not (scheduled <= now_dt < (scheduled + timedelta(seconds=60))):
-        return False
-
-    today_s = now_dt.date().isoformat()
-    if alarm_row["last_fired_date"] == today_s:
-        return False
-
-    return True
+def alarm_scheduled_datetime_for_today(time_hhmm: str, now_dt: datetime) -> datetime:
+    hh, mm = [int(x) for x in time_hhmm.split(":")]
+    return now_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
 
 def scheduler_thread():
     log.info("Scheduler thread started")
+    last_tick = datetime.now() - timedelta(seconds=2)
+
     last_minute = None
     while True:
         try:
             now_dt = datetime.now()
+
+            # periodic tick log
             if last_minute != (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute):
                 last_minute = (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute)
-                log.debug("Tick %s (tz=%s)", now_dt.strftime("%Y-%m-%d %H:%M:%S"), tz_hint())
+                log.debug("Tick now=%s tz=%s last_tick=%s",
+                          now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                          tz_hint(),
+                          last_tick.strftime("%Y-%m-%d %H:%M:%S"))
 
             alarms = list_alarms()
+            today_s = now_dt.date().isoformat()
+            wd = now_dt.weekday()  # Mon=0..Sun=6
+
             for a in alarms:
-                if is_due_now(a, now_dt):
-                    log.info("ALARM DUE: id=%s time=%s mask=%s", a["id"], a["time_hhmm"], a["days_mask"])
-                    set_last_fired(a["id"], now_dt.date().isoformat())
+                if int(a["enabled"]) != 1:
+                    continue
+
+                mask = int(a["days_mask"])
+                if (mask & (1 << wd)) == 0:
+                    continue
+
+                if a["last_fired_date"] == today_s:
+                    continue
+
+                try:
+                    scheduled = alarm_scheduled_datetime_for_today(a["time_hhmm"], now_dt)
+                except Exception:
+                    log.warning("Bad time_hhmm for alarm id=%s: %r", a.get("id"), a.get("time_hhmm"))
+                    continue
+
+                # Robust trigger: fire when the loop crosses scheduled time
+                if last_tick < scheduled <= now_dt:
+                    log.info("ALARM DUE: id=%s scheduled=%s now=%s mask=%s",
+                             a["id"],
+                             scheduled.strftime("%Y-%m-%d %H:%M:%S"),
+                             now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                             mask)
+                    set_last_fired(a["id"], today_s)
                     start_alarm()
                     break
+
+            last_tick = now_dt
+
         except Exception:
             log.exception("Scheduler exception")
+
         time.sleep(0.25)
 
 
