@@ -1,0 +1,5 @@
+24 h format
+Alarms wont go off?
+Undervolting
+Volume knob
+Days of the week should be checkboxes

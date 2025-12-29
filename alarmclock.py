@@ -9,6 +9,7 @@ import subprocess
 import threading
 import random
 import glob
+import logging
 from datetime import datetime, timedelta
 
 from flask import Flask, request, jsonify, render_template
@@ -23,6 +24,15 @@ ALARMTONES_DIR = os.path.join(APP_DIR, "alarmtones")
 # ----- GPIO button -----
 BUTTON_GPIO = 17  # BCM numbering (GPIO17 / pin 11)
 button = Button(BUTTON_GPIO, pull_up=True, bounce_time=0.05)
+
+# ----- Logging -----
+LOG_LEVEL = os.environ.get("ALARM_LOG_LEVEL", "DEBUG").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
+    format="%(asctime)s.%(msecs)03d %(levelname)s [%(threadName)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("alarmclock")
 
 # ----- Defaults -----
 DEFAULT_SETTINGS = {
@@ -50,7 +60,7 @@ def normalize_hhmm(value: str) -> str:
     """Accept 'HH:MM' (or 'HH:MM:SS') and return 'HH:MM'. Raise ValueError if invalid."""
     if value is None:
         raise ValueError("missing time")
-    value = value.strip()
+    value = str(value).strip()
     parts = value.split(":")
     if len(parts) < 2:
         raise ValueError("time must be HH:MM")
@@ -65,8 +75,19 @@ def pick_random_alarmtone() -> str:
     """Pick random mp3 from ./alarmtones. Fall back to configured alarm_tone_path."""
     candidates = glob.glob(os.path.join(ALARMTONES_DIR, "*.mp3"))
     if candidates:
-        return random.choice(candidates)
-    return get_setting("alarm_tone_path")
+        choice = random.choice(candidates)
+        log.debug("Picked random alarm tone: %s", choice)
+        return choice
+    fallback = get_setting("alarm_tone_path")
+    log.debug("No mp3 in alarmtones/. Using fallback: %s", fallback)
+    return fallback
+
+
+def tz_hint() -> str:
+    try:
+        return time.tzname[0]
+    except Exception:
+        return "unknown"
 
 
 # ---------- DB ----------
@@ -82,32 +103,35 @@ def init_db():
 
     cur.execute(
         """
-    CREATE TABLE IF NOT EXISTS settings (
-        k TEXT PRIMARY KEY,
-        v TEXT NOT NULL
-    )
-    """
+        CREATE TABLE IF NOT EXISTS settings (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        )
+        """
     )
 
     cur.execute(
         """
-    CREATE TABLE IF NOT EXISTS alarms (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        time_hhmm TEXT NOT NULL,           -- "07:30"
-        days_mask INTEGER NOT NULL,        -- bitmask Mon..Sun: bit0=Mon ... bit6=Sun
-        enabled INTEGER NOT NULL DEFAULT 1,
-        last_fired_date TEXT              -- "YYYY-MM-DD" to prevent multiple fires/day
-    )
-    """
+        CREATE TABLE IF NOT EXISTS alarms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            time_hhmm TEXT NOT NULL,           -- "07:30"
+            days_mask INTEGER NOT NULL,        -- bitmask Mon..Sun: bit0=Mon ... bit6=Sun
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_fired_date TEXT              -- "YYYY-MM-DD" to prevent multiple fires/day
+        )
+        """
     )
 
     conn.commit()
 
-    # seed settings
     for k, v in DEFAULT_SETTINGS.items():
         cur.execute("INSERT OR IGNORE INTO settings(k,v) VALUES (?,?)", (k, json.dumps(v)))
     conn.commit()
     conn.close()
+
+    log.info("DB ready at %s", DB_PATH)
+    log.info("Timezone: %s (tzname=%s)", tz_hint(), getattr(time, "tzname", None))
+    log.info("Alarm tones dir: %s", ALARMTONES_DIR)
 
 
 def get_setting(key):
@@ -146,6 +170,7 @@ def create_alarm(time_hhmm, days_mask, enabled=True):
     )
     conn.commit()
     conn.close()
+    log.info("Created alarm time=%s mask=%s enabled=%s", time_hhmm, int(days_mask), bool(enabled))
 
 
 def update_alarm(alarm_id, time_hhmm=None, days_mask=None, enabled=None):
@@ -166,6 +191,7 @@ def update_alarm(alarm_id, time_hhmm=None, days_mask=None, enabled=None):
     )
     conn.commit()
     conn.close()
+    log.info("Updated alarm id=%s time=%s mask=%s enabled=%s", alarm_id, new_time, new_mask, bool(new_enabled))
     return True
 
 
@@ -174,6 +200,7 @@ def delete_alarm(alarm_id):
     conn.execute("DELETE FROM alarms WHERE id=?", (alarm_id,))
     conn.commit()
     conn.close()
+    log.info("Deleted alarm id=%s", alarm_id)
 
 
 def set_last_fired(alarm_id, fired_date_str):
@@ -186,6 +213,7 @@ def set_last_fired(alarm_id, fired_date_str):
 # ---------- Audio ----------
 def set_system_volume(percent: int):
     percent = max(0, min(100, int(percent)))
+    log.info("Setting volume to %s%%", percent)
     subprocess.run(
         ["amixer", "sset", "Master", f"{percent}%"],
         stdout=subprocess.DEVNULL,
@@ -197,6 +225,7 @@ def stop_audio():
     global player_proc, current_mode
     with player_lock:
         if player_proc and player_proc.poll() is None:
+            log.info("Stopping audio (mode=%s, pid=%s)", current_mode, player_proc.pid)
             try:
                 player_proc.terminate()
                 player_proc.wait(timeout=2)
@@ -215,7 +244,10 @@ def play_vlc(target: str, loop: bool):
     loop: if True, loop forever
     """
     global player_proc
-    args = ["cvlc", "--no-video", "--quiet"]
+    args = ["cvlc", "--no-video"]
+    # Keep output visible when debugging, otherwise quiet.
+    if LOG_LEVEL not in ("DEBUG", "INFO"):
+        args += ["--quiet"]
     if loop:
         args += ["--loop"]
     args += [target]
@@ -223,7 +255,12 @@ def play_vlc(target: str, loop: bool):
     with player_lock:
         if player_proc and player_proc.poll() is None:
             stop_audio()
-        player_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log.info("Starting VLC loop=%s target=%s", loop, target)
+        # In debug/info, show VLC output; otherwise discard.
+        if LOG_LEVEL in ("DEBUG", "INFO"):
+            player_proc = subprocess.Popen(args)
+        else:
+            player_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def start_alarm():
@@ -232,6 +269,7 @@ def start_alarm():
     tone = pick_random_alarmtone()
     play_vlc(tone, loop=True)
     current_mode = "alarm"
+    log.info("Mode -> alarm")
 
 
 def start_content():
@@ -239,8 +277,10 @@ def start_content():
     set_system_volume(get_setting("volume_percent"))
     ctype = get_setting("content_type")
     cval = get_setting("content_value")
+    log.info("Starting content type=%s value=%s", ctype, cval)
     play_vlc(cval, loop=False)
     current_mode = "content"
+    log.info("Mode -> content")
 
 
 # ---------- Death clock ----------
@@ -249,7 +289,6 @@ def hours_remaining_until_expected_death():
     life_years = float(get_setting("life_expectancy_years"))
 
     b = datetime.strptime(birth_s, "%Y-%m-%d").date()
-    # Convert years -> days using mean year length
     days = life_years * 365.2425
     expected_death = datetime.combine(b, datetime.min.time()) + timedelta(days=days)
     now = datetime.now()
@@ -258,14 +297,15 @@ def hours_remaining_until_expected_death():
 
 
 # ---------- Scheduler loop ----------
-def is_due_today(alarm_row, now_dt: datetime) -> bool:
+def is_due_now(alarm_row, now_dt: datetime) -> bool:
     if int(alarm_row["enabled"]) != 1:
         return False
 
     time_hhmm = alarm_row["time_hhmm"]
     try:
         hh, mm = [int(x) for x in time_hhmm.split(":")]
-    except ValueError:
+    except Exception:
+        log.warning("Bad time_hhmm in DB for alarm id=%s: %r", alarm_row.get("id"), time_hhmm)
         return False
 
     # weekday bit: Mon=0 .. Sun=6
@@ -274,8 +314,9 @@ def is_due_today(alarm_row, now_dt: datetime) -> bool:
     if (mask & (1 << wd)) == 0:
         return False
 
-    # trigger at matching minute (and once per day)
-    if now_dt.hour != hh or now_dt.minute != mm:
+    scheduled = now_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    # Fire if we are within the first 60 seconds after scheduled time.
+    if not (scheduled <= now_dt < (scheduled + timedelta(seconds=60))):
         return False
 
     today_s = now_dt.date().isoformat()
@@ -286,24 +327,31 @@ def is_due_today(alarm_row, now_dt: datetime) -> bool:
 
 
 def scheduler_thread():
+    log.info("Scheduler thread started")
+    last_minute = None
     while True:
         try:
             now_dt = datetime.now()
+            if last_minute != (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute):
+                last_minute = (now_dt.year, now_dt.month, now_dt.day, now_dt.hour, now_dt.minute)
+                log.debug("Tick %s (tz=%s)", now_dt.strftime("%Y-%m-%d %H:%M:%S"), tz_hint())
+
             alarms = list_alarms()
             for a in alarms:
-                if is_due_today(a, now_dt):
+                if is_due_now(a, now_dt):
+                    log.info("ALARM DUE: id=%s time=%s mask=%s", a["id"], a["time_hhmm"], a["days_mask"])
                     set_last_fired(a["id"], now_dt.date().isoformat())
                     start_alarm()
                     break
         except Exception:
-            pass
-
-        time.sleep(1)
+            log.exception("Scheduler exception")
+        time.sleep(0.25)
 
 
 # ---------- Button behavior ----------
 def on_button_pressed():
     global current_mode
+    log.info("Button pressed (mode=%s)", current_mode)
     if current_mode == "alarm":
         stop_audio()
         start_content()
@@ -318,7 +366,7 @@ button.when_pressed = on_button_pressed
 @app.route("/")
 def index():
     expected_death, hrs = hours_remaining_until_expected_death()
-    hrs_int = int(hrs)
+    hrs_int = max(0, int(hrs))
     death_text = f"Du har kun {hrs_int} timer tilbage af livet, brug ikke dem alle på at sove"
 
     return render_template(
@@ -333,9 +381,31 @@ def index():
             "life_expectancy_years": get_setting("life_expectancy_years"),
         },
         expected_death=expected_death.strftime("%Y-%m-%d %H:%M"),
+        expected_death_epoch=int(expected_death.timestamp()),
         hours_remaining=hrs,
         death_text=death_text,
         mode=current_mode,
+        server_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        tz=tz_hint(),
+    )
+
+
+@app.route("/api/debug/status", methods=["GET"])
+def api_debug_status():
+    now_dt = datetime.now()
+    return jsonify(
+        {
+            "server_time": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "tzname": getattr(time, "tzname", None),
+            "tz_hint": tz_hint(),
+            "mode": current_mode,
+            "alarms": list_alarms(),
+            "settings": {
+                "volume_percent": get_setting("volume_percent"),
+                "content_type": get_setting("content_type"),
+                "content_value": get_setting("content_value"),
+            },
+        }
     )
 
 
@@ -354,6 +424,7 @@ def api_settings():
         )
 
     data = request.get_json(force=True) or {}
+    log.debug("POST /api/settings payload=%s", data)
 
     old_content_type = get_setting("content_type")
     old_content_value = get_setting("content_value")
@@ -372,10 +443,10 @@ def api_settings():
     if "volume_percent" in data:
         set_system_volume(int(get_setting("volume_percent")))
 
-    # Apply stream/file changes immediately if content is currently playing
     new_content_type = get_setting("content_type")
     new_content_value = get_setting("content_value")
     if current_mode == "content" and (new_content_type != old_content_type or new_content_value != old_content_value):
+        log.info("Content changed while playing; restarting content")
         stop_audio()
         start_content()
 
@@ -388,6 +459,7 @@ def api_alarms():
         return jsonify(list_alarms())
 
     data = request.get_json(force=True) or {}
+    log.debug("POST /api/alarms payload=%s", data)
 
     try:
         time_hhmm = normalize_hhmm(data.get("time_hhmm"))
@@ -398,6 +470,9 @@ def api_alarms():
         days_mask = int(data.get("days_mask", 0))
     except Exception:
         return jsonify({"ok": False, "error": "bad days_mask"}), 400
+
+    if days_mask <= 0 or days_mask > 127:
+        return jsonify({"ok": False, "error": "days_mask must be 1..127"}), 400
 
     enabled = bool(data.get("enabled", True))
     create_alarm(time_hhmm, days_mask, enabled)
@@ -411,6 +486,7 @@ def api_alarm_one(alarm_id):
         return jsonify({"ok": True})
 
     data = request.get_json(force=True) or {}
+    log.debug("PATCH /api/alarms/%s payload=%s", alarm_id, data)
 
     time_hhmm = data.get("time_hhmm")
     if time_hhmm is not None:
@@ -418,6 +494,14 @@ def api_alarm_one(alarm_id):
             time_hhmm = normalize_hhmm(time_hhmm)
         except Exception as e:
             return jsonify({"ok": False, "error": f"bad time_hhmm: {e}"}), 400
+
+    if "days_mask" in data:
+        try:
+            dm = int(data.get("days_mask"))
+        except Exception:
+            return jsonify({"ok": False, "error": "bad days_mask"}), 400
+        if dm <= 0 or dm > 127:
+            return jsonify({"ok": False, "error": "days_mask must be 1..127"}), 400
 
     ok = update_alarm(
         alarm_id,
@@ -432,6 +516,7 @@ def api_alarm_one(alarm_id):
 def api_control():
     data = request.get_json(force=True) or {}
     action = data.get("action")
+    log.debug("POST /api/control action=%s", action)
 
     if action == "test_alarm":
         start_alarm()
@@ -449,11 +534,10 @@ def api_control():
 
 def main():
     init_db()
-
-    t = threading.Thread(target=scheduler_thread, daemon=True)
+    t = threading.Thread(target=scheduler_thread, daemon=True, name="scheduler")
     t.start()
-
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    log.info("Starting Flask on 0.0.0.0:8080")
+    app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
