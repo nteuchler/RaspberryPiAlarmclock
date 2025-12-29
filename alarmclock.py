@@ -36,12 +36,12 @@ log = logging.getLogger("alarmclock")
 
 # ----- Defaults -----
 DEFAULT_SETTINGS = {
-    "volume_percent": 65,  # 0..100
+    "volume_percent": 90,  # 0..100
     # Used as fallback if alarmtones/ has no mp3
     "alarm_tone_path": os.path.join(APP_DIR, "media", "alarmtone.mp3"),
     # Used after button press:
     "content_type": "stream",  # "stream" or "file"
-    "content_value": "http://icecast.omroep.nl/radio1-bb-mp3",
+    "content_value": "http://live-icy.gss.dr.dk/A/A05H.mp3,
     # death clock:
     "birthdate": "1999-04-15",
     "life_expectancy_years": 79.9,
