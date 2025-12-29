@@ -1,181 +1,486 @@
 <!-- File: templates/index.html -->
 <!doctype html>
-<html>
+<html lang="da">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Pi Alarm Clock</title>
   <style>
-    body { font-family: sans-serif; margin: 16px; }
-    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    input, select, button { padding: 10px; font-size: 16px; }
-    button { cursor: pointer; }
-    small { color: #666; }
-    .danger { border-color: #f3c; }
+    :root {
+      --bg: #0b0d12;
+      --card: #111522;
+      --muted: #9aa4b2;
+      --text: #e8eef6;
+      --line: rgba(255,255,255,0.08);
+      --accent: #7aa2ff;
+      --danger: #ff4d6d;
+      --ok: #2dd4bf;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 10% 0%, rgba(122,162,255,0.18), transparent 60%),
+                  radial-gradient(900px 600px at 90% 20%, rgba(45,212,191,0.10), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    .wrap { max-width: 920px; margin: 0 auto; padding: 18px 14px 40px; }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin-bottom: 14px;
+    }
+    .title { font-size: 18px; font-weight: 750; letter-spacing: 0.2px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px;
+      background: rgba(255,255,255,0.02);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); }
+    .dot.idle { background: var(--muted); }
+    .dot.alarm { background: var(--danger); }
+    .dot.content { background: var(--ok); }
+
+    .grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+    @media (min-width: 860px) { .grid { grid-template-columns: 1.15fr 0.85fr; } }
+
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+
+    h2 { margin: 0 0 10px; font-size: 15px; font-weight: 750; color: rgba(232,238,246,0.92); }
+    h3 { margin: 0 0 10px; font-size: 14px; font-weight: 740; color: rgba(232,238,246,0.92); }
+
+    .muted { color: var(--muted); font-size: 12px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .row > * { min-width: 140px; }
+
+    label { font-size: 12px; color: var(--muted); display: grid; gap: 6px; }
+    input, select, button {
+      font-size: 16px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      outline: none;
+    }
+    input[type="number"] { width: 120px; }
+    input[type="time"] { width: 140px; }
+    input:focus, select:focus { border-color: rgba(122,162,255,0.6); box-shadow: 0 0 0 3px rgba(122,162,255,0.12); }
+
+    button {
+      cursor: pointer;
+      border-color: rgba(122,162,255,0.35);
+      background: rgba(122,162,255,0.10);
+      font-weight: 700;
+    }
+    button.secondary {
+      border-color: var(--line);
+      background: rgba(255,255,255,0.02);
+      color: var(--text);
+      font-weight: 650;
+    }
+    button.danger {
+      border-color: rgba(255,77,109,0.45);
+      background: rgba(255,77,109,0.10);
+    }
+
+    .divider { height: 1px; background: var(--line); margin: 12px 0; }
+
+    /* Death timer */
+    .death {
+      position: relative;
+      overflow: hidden;
+    }
+    .death::before {
+      content: "";
+      position: absolute; inset: -2px;
+      background: radial-gradient(800px 220px at 30% 0%, rgba(255,77,109,0.22), transparent 60%);
+      pointer-events: none;
+    }
+    .deathHead { position: relative; display: grid; gap: 8px; }
+    .deathKicker { font-size: 12px; color: var(--muted); }
+    .deathBig {
+      font-size: 38px;
+      line-height: 1.05;
+      font-weight: 900;
+      letter-spacing: -0.6px;
+    }
+    .deathSmall { color: rgba(232,238,246,0.85); font-size: 13px; font-weight: 650; }
+    .bar {
+      margin-top: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--line);
+      overflow: hidden;
+      position: relative;
+    }
+    .bar > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, rgba(122,162,255,0.85), rgba(255,77,109,0.85));
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .chip {
+      font-size: 12px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.02);
+      padding: 7px 10px;
+      border-radius: 999px;
+    }
+
+    /* Days */
+    .days {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .day {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.02);
+      color: rgba(232,238,246,0.9);
+      font-size: 13px;
+      user-select: none;
+    }
+    .day input { width: 16px; height: 16px; }
+
+    .alarmItem { display: grid; gap: 10px; }
+    .alarmMeta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .alarmId { font-weight: 850; color: rgba(232,238,246,0.9); }
   </style>
 </head>
 <body>
+<div class="wrap">
 
-<div class="card">
-  <h2>Status</h2>
-  <div>Mode: <b>{{ mode }}</b></div>
-  <div>Expected death time: <b>{{ expected_death }}</b></div>
-  <div><b id="deathText">{{ death_text }}</b></div>
-  <small>Life expectancy is a statistical expectation, not a prediction.</small>
-</div>
-
-<div class="card">
-  <h2>Settings</h2>
-  <div class="row">
-    <label>Volume (0-100):
-      <input id="vol" type="number" min="0" max="100" value="{{ settings.volume_percent }}"/>
-    </label>
-    <button onclick="saveSettings()">Save</button>
+  <div class="topbar">
+    <div class="title">Pi Alarm Clock</div>
+    <div class="pill">
+      <span class="dot {{ mode }}"></span>
+      <span>Mode: <b style="color: var(--text)">{{ mode }}</b></span>
+      <span class="muted">Server: {{ server_time }} ({{ tz }})</span>
+    </div>
   </div>
 
-  <div class="row">
-    <label>Alarm tone fallback path:
-      <input id="tone" style="width: 320px" value="{{ settings.alarm_tone_path }}"/>
-    </label>
+  <div class="grid">
+    <div class="card death">
+      <div class="deathHead">
+        <div class="deathKicker">Death timer</div>
+        <div class="deathBig" id="deathHours">—</div>
+        <div class="deathSmall" id="deathText">{{ death_text }}</div>
+        <div class="bar" aria-label="countdown bar"><span id="deathBar"></span></div>
+        <div class="chips">
+          <div class="chip">Expected: <b style="color: var(--text)">{{ expected_death }}</b></div>
+          <div class="chip">24h clock</div>
+          <div class="chip muted">Statistik, ikke en spådom</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Quick controls</h2>
+      <div class="row">
+        <button onclick="control('test_alarm')">Test alarm</button>
+        <button onclick="control('test_content')" class="secondary">Test content</button>
+        <button onclick="control('stop')" class="danger">Stop</button>
+      </div>
+      <div class="divider"></div>
+      <div class="muted">Debug endpoint: <code>/api/debug/status</code></div>
+    </div>
   </div>
-  <small>Alarm tones are random MP3s from <b>./alarmtones/</b>. Fallback path is used only if that folder is empty.</small>
 
-  <div class="row" style="margin-top:10px;">
-    <label>Content type:
-      <select id="ctype">
-        <option value="stream" {% if settings.content_type=="stream" %}selected{% endif %}>Internet radio stream</option>
-        <option value="file" {% if settings.content_type=="file" %}selected{% endif %}>Local file</option>
-      </select>
-    </label>
-    <label>Stream URL or file path:
-      <input id="cval" style="width: 420px" value="{{ settings.content_value }}"/>
-    </label>
-  </div>
+  <div class="card" style="margin-top: 12px;">
+    <h2>Settings</h2>
 
-  <div class="row">
-    <button onclick="control('test_alarm')">Test alarm</button>
-    <button onclick="control('test_content')">Test content</button>
-    <button onclick="control('stop')">Stop</button>
-  </div>
-
-  <hr/>
-  <div class="row">
-    <label>Birthdate:
-      <input id="birth" value="{{ settings.birthdate }}"/>
-    </label>
-    <label>Life expectancy (years):
-      <input id="life" type="number" step="0.1" value="{{ settings.life_expectancy_years }}"/>
-    </label>
-    <button onclick="saveSettings()">Save</button>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Alarms</h2>
-
-  <div class="card danger">
-    <h3>Add alarm</h3>
     <div class="row">
-      <label>Time:
-        <input id="new_time" type="time" value="07:30"/>
+      <label>Volume (0–100)
+        <input id="vol" type="number" min="0" max="100" value="{{ settings.volume_percent }}"/>
       </label>
-      <label>Days:
-        <select id="new_days">
-          <option value="62">Mon-Fri</option>
-          <option value="127">Every day</option>
-          <option value="65">Sat+Sun</option>
-          <option value="1">Mon</option>
-          <option value="2">Tue</option>
-          <option value="4">Wed</option>
-          <option value="8">Thu</option>
-          <option value="16">Fri</option>
-          <option value="32">Sat</option>
-          <option value="64">Sun</option>
+
+      <label>Alarm tone fallback path
+        <input id="tone" style="min-width: 320px" value="{{ settings.alarm_tone_path }}"/>
+      </label>
+
+      <button onclick="saveSettings()">Save</button>
+    </div>
+
+    <div class="muted" style="margin-top: 8px;">
+      Alarm tones are random MP3s from <b>./alarmtones/</b>. Fallback path is used only if that folder is empty.
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="row">
+      <label>Content type
+        <select id="ctype">
+          <option value="stream" {% if settings.content_type=="stream" %}selected{% endif %}>Internet radio stream</option>
+          <option value="file" {% if settings.content_type=="file" %}selected{% endif %}>Local file</option>
         </select>
       </label>
-      <button onclick="addAlarm()">Add</button>
+
+      <label>Stream URL or file path
+        <input id="cval" style="min-width: 360px" value="{{ settings.content_value }}"/>
+      </label>
     </div>
-    <small>Days are stored as a bitmask: Mon=1, Tue=2, ..., Sun=64.</small>
+
+    <div class="divider"></div>
+
+    <div class="row">
+      <label>Birthdate (YYYY-MM-DD)
+        <input id="birth" value="{{ settings.birthdate }}"/>
+      </label>
+
+      <label>Life expectancy (years)
+        <input id="life" type="number" step="0.1" value="{{ settings.life_expectancy_years }}"/>
+      </label>
+
+      <button onclick="saveSettings()">Save</button>
+    </div>
   </div>
 
-  {% for a in alarms %}
-    <div class="card">
+  <div class="card" style="margin-top: 12px;">
+    <h2>Alarms</h2>
+
+    <div class="card" style="margin: 12px 0; border-radius: 14px;">
+      <h3>Add alarm</h3>
       <div class="row">
-        <div><b>#{{ a.id }}</b></div>
-        <label>Time:
-          <input id="t{{a.id}}" type="time" value="{{ a.time_hhmm }}"/>
+        <label>Time (24h)
+          <input id="new_time" type="time" step="60" value="07:30"/>
         </label>
-        <label>Days mask:
-          <input id="m{{a.id}}" type="number" value="{{ a.days_mask }}"/>
-        </label>
-        <label>Enabled:
-          <select id="e{{a.id}}">
-            <option value="true" {% if a.enabled==1 %}selected{% endif %}>true</option>
-            <option value="false" {% if a.enabled==0 %}selected{% endif %}>false</option>
+      </div>
+
+      <div class="muted" style="margin: 6px 0 8px;">Days of week</div>
+      <div class="days" id="new_days">
+        <label class="day"><input type="checkbox" data-bit="0" checked> Mon</label>
+        <label class="day"><input type="checkbox" data-bit="1" checked> Tue</label>
+        <label class="day"><input type="checkbox" data-bit="2" checked> Wed</label>
+        <label class="day"><input type="checkbox" data-bit="3" checked> Thu</label>
+        <label class="day"><input type="checkbox" data-bit="4" checked> Fri</label>
+        <label class="day"><input type="checkbox" data-bit="5"> Sat</label>
+        <label class="day"><input type="checkbox" data-bit="6"> Sun</label>
+      </div>
+
+      <div class="row" style="margin-top: 10px;">
+        <label>Enabled
+          <select id="new_enabled">
+            <option value="true" selected>true</option>
+            <option value="false">false</option>
           </select>
         </label>
-        <button onclick="saveAlarm({{a.id}})">Save</button>
-        <button onclick="delAlarm({{a.id}})">Delete</button>
+        <button onclick="addAlarm()">Add</button>
       </div>
-      <small>Last fired: {{ a.last_fired_date or "never" }}</small>
+
+      <div class="muted" style="margin-top: 8px;">
+        Bitmask: Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64.
+      </div>
     </div>
-  {% endfor %}
+
+    {% for a in alarms %}
+      <div class="card" style="margin: 12px 0; border-radius: 14px;">
+        <div class="alarmItem">
+          <div class="alarmMeta">
+            <div class="alarmId">#{{ a.id }}</div>
+            <div class="muted">Last fired: {{ a.last_fired_date or "never" }}</div>
+          </div>
+
+          <div class="row">
+            <label>Time (24h)
+              <input id="t{{a.id}}" type="time" step="60" value="{{ a.time_hhmm }}"/>
+            </label>
+
+            <label>Enabled
+              <select id="e{{a.id}}">
+                <option value="true" {% if a.enabled==1 %}selected{% endif %}>true</option>
+                <option value="false" {% if a.enabled==0 %}selected{% endif %}>false</option>
+              </select>
+            </label>
+
+            <input type="hidden" id="m{{a.id}}" value="{{ a.days_mask }}"/>
+          </div>
+
+          <div class="muted">Days of week</div>
+          <div class="days" data-alarm="{{a.id}}">
+            <label class="day"><input type="checkbox" data-bit="0"> Mon</label>
+            <label class="day"><input type="checkbox" data-bit="1"> Tue</label>
+            <label class="day"><input type="checkbox" data-bit="2"> Wed</label>
+            <label class="day"><input type="checkbox" data-bit="3"> Thu</label>
+            <label class="day"><input type="checkbox" data-bit="4"> Fri</label>
+            <label class="day"><input type="checkbox" data-bit="5"> Sat</label>
+            <label class="day"><input type="checkbox" data-bit="6"> Sun</label>
+          </div>
+
+          <div class="row" style="margin-top: 10px;">
+            <button onclick="saveAlarm({{a.id}})">Save</button>
+            <button class="danger" onclick="delAlarm({{a.id}})">Delete</button>
+          </div>
+
+          <div class="muted">Mask: <span id="maskText{{a.id}}">{{ a.days_mask }}</span></div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
 </div>
 
 <script>
-async function saveSettings() {
-  const payload = {
-    volume_percent: parseInt(document.getElementById('vol').value || "0"),
-    alarm_tone_path: document.getElementById('tone').value,
-    content_type: document.getElementById('ctype').value,
-    content_value: document.getElementById('cval').value,
-    birthdate: document.getElementById('birth').value,
-    life_expectancy_years: parseFloat(document.getElementById('life').value || "0"),
-  };
-  await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  location.reload();
-}
+  // ----- Death timer live countdown -----
+  const expectedDeathEpoch = {{ expected_death_epoch|int }};
+  const deathHoursEl = document.getElementById('deathHours');
+  const deathTextEl = document.getElementById('deathText');
+  const deathBarEl = document.getElementById('deathBar');
 
-async function addAlarm() {
-  const payload = {
-    time_hhmm: document.getElementById('new_time').value,
-    days_mask: parseInt(document.getElementById('new_days').value),
-    enabled: true
-  };
+  function fmtInt(n) { return Math.max(0, Math.floor(n)).toString(); }
 
-  const res = await fetch('/api/alarms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  if (!res.ok) {
-    const err = await res.json().catch(()=>({error:"unknown"}));
-    alert("Failed to add alarm: " + (err.error || res.status));
-    return;
+  function updateDeath() {
+    const now = Date.now() / 1000;
+    const secLeft = Math.max(0, expectedDeathEpoch - now);
+    const hoursLeft = secLeft / 3600;
+
+    deathHoursEl.textContent = fmtInt(hoursLeft) + " timer tilbage";
+    deathTextEl.textContent = "Du har kun " + fmtInt(hoursLeft) + " timer tilbage af livet, brug ikke dem alle på at sove";
+
+    // Bar: map 0..(5 years) into 0..100 for a visible-ish bar (pure UI, not meaningful).
+    const fiveYears = 5 * 365.2425 * 24;
+    const pct = Math.max(0, Math.min(100, (hoursLeft / fiveYears) * 100));
+    deathBarEl.style.width = pct.toFixed(2) + "%";
   }
-  location.reload();
-}
+  updateDeath();
+  setInterval(updateDeath, 1000);
 
-async function saveAlarm(id) {
-  const payload = {
-    time_hhmm: document.getElementById('t'+id).value,
-    days_mask: parseInt(document.getElementById('m'+id).value),
-    enabled: document.getElementById('e'+id).value === "true"
-  };
-
-  const res = await fetch('/api/alarms/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  if (!res.ok) {
-    const err = await res.json().catch(()=>({error:"unknown"}));
-    alert("Failed to save alarm: " + (err.error || res.status));
-    return;
+  // ----- Days helpers (checkboxes -> bitmask) -----
+  function maskFromContainer(container) {
+    let mask = 0;
+    const boxes = container.querySelectorAll('input[type="checkbox"][data-bit]');
+    boxes.forEach(b => {
+      const bit = parseInt(b.getAttribute('data-bit'));
+      if (b.checked) mask |= (1 << bit);
+    });
+    return mask;
   }
-  location.reload();
-}
 
-async function delAlarm(id) {
-  await fetch('/api/alarms/'+id, { method:'DELETE' });
-  location.reload();
-}
+  function setCheckboxesFromMask(container, mask) {
+    const boxes = container.querySelectorAll('input[type="checkbox"][data-bit]');
+    boxes.forEach(b => {
+      const bit = parseInt(b.getAttribute('data-bit'));
+      b.checked = ((mask & (1 << bit)) !== 0);
+    });
+  }
 
-async function control(action) {
-  await fetch('/api/control', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action}) });
-}
+  // Initialize existing alarms' checkboxes based on hidden mask
+  document.querySelectorAll('.days[data-alarm]').forEach(container => {
+    const id = container.getAttribute('data-alarm');
+    const mask = parseInt(document.getElementById('m' + id).value || "0");
+    setCheckboxesFromMask(container, mask);
+
+    const updateMaskText = () => {
+      const m = maskFromContainer(container);
+      document.getElementById('m' + id).value = m;
+      const txt = document.getElementById('maskText' + id);
+      if (txt) txt.textContent = m;
+    };
+    container.addEventListener('change', updateMaskText);
+    updateMaskText();
+  });
+
+  // ----- API calls -----
+  async function saveSettings() {
+    const payload = {
+      volume_percent: parseInt(document.getElementById('vol').value || "0"),
+      alarm_tone_path: document.getElementById('tone').value,
+      content_type: document.getElementById('ctype').value,
+      content_value: document.getElementById('cval').value,
+      birthdate: document.getElementById('birth').value,
+      life_expectancy_years: parseFloat(document.getElementById('life').value || "0"),
+    };
+
+    const res = await fetch('/api/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:"unknown"}));
+      alert("Failed to save settings: " + (err.error || res.status));
+      return;
+    }
+    location.reload();
+  }
+
+  async function addAlarm() {
+    const daysMask = maskFromContainer(document.getElementById('new_days'));
+    const payload = {
+      time_hhmm: document.getElementById('new_time').value,
+      days_mask: daysMask,
+      enabled: document.getElementById('new_enabled').value === "true"
+    };
+
+    const res = await fetch('/api/alarms', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:"unknown"}));
+      alert("Failed to add alarm: " + (err.error || res.status));
+      return;
+    }
+    location.reload();
+  }
+
+  async function saveAlarm(id) {
+    const daysContainer = document.querySelector('.days[data-alarm="'+id+'"]');
+    const payload = {
+      time_hhmm: document.getElementById('t'+id).value,
+      days_mask: maskFromContainer(daysContainer),
+      enabled: document.getElementById('e'+id).value === "true"
+    };
+
+    const res = await fetch('/api/alarms/'+id, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:"unknown"}));
+      alert("Failed to save alarm: " + (err.error || res.status));
+      return;
+    }
+    location.reload();
+  }
+
+  async function delAlarm(id) {
+    await fetch('/api/alarms/'+id, { method:'DELETE' });
+    location.reload();
+  }
+
+  async function control(action) {
+    const res = await fetch('/api/control', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action})
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:"unknown"}));
+      alert("Control failed: " + (err.error || res.status));
+    }
+  }
 </script>
 
 </body>
