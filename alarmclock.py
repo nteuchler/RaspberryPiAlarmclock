@@ -41,7 +41,7 @@ DEFAULT_SETTINGS = {
     "alarm_tone_path": os.path.join(APP_DIR, "media", "alarmtone.mp3"),
     # Used after button press:
     "content_type": "stream",  # "stream" or "file"
-    "content_value": "http://live-icy.gss.dr.dk/A/A05H.mp3,
+    "content_value": "http://live-icy.gss.dr.dk/A/A05H.mp3",
     # death clock:
     "birthdate": "1999-04-15",
     "life_expectancy_years": 79.9,
