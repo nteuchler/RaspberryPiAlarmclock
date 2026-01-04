@@ -13,7 +13,23 @@ import logging
 from datetime import datetime, timedelta
 
 from flask import Flask, request, jsonify, render_template
-from gpiozero import Button
+from gpiozero import Button, OutputDevice
+
+RELAY_GPIO = 27  # BCM numbering
+relay = OutputDevice(RELAY_GPIO, active_high=True, initial_value=False)
+
+def relay_on():
+    if not relay.value:
+        relay.on()
+        log.debug("Relay ON (amp power enabled)")
+
+def relay_off():
+    if relay.value:
+        relay.off()
+        log.debug("Relay OFF (amp power disabled)")
+
+
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(APP_DIR, "alarmclock.db")
@@ -259,10 +275,12 @@ def stop_audio():
                     pass
         player_proc = None
         current_mode = "idle"
+    relay_off()
 
 
 def play_vlc(target: str, loop: bool):
     global player_proc
+    relay_on()
     args = ["cvlc", "--no-video", "--volume", str(VLC_VOLUME)]
     if LOG_LEVEL not in ("DEBUG", "INFO"):
         args += ["--quiet"]
